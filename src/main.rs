@@ -1,5 +1,8 @@
+use std::sync::{Arc, Mutex};
+
 use tonic::{transport::Server, Request, Response, Status};
 
+use ::espikey::InMemoryStorage;
 use espikey::kv_service_server::{KvService, KvServiceServer};
 use espikey::{GetRequest, GetResponse, SetRequest, SetResponse};
 
@@ -7,22 +10,40 @@ pub mod espikey {
     tonic::include_proto!("espikey");
 }
 
-#[derive(Debug, Default)]
-struct EspikeyServer {}
+#[derive(Debug)]
+struct EspikeyServer {
+    storage: Arc<Mutex<InMemoryStorage>>,
+}
 
 #[tonic::async_trait]
 impl KvService for EspikeyServer {
     async fn get(&self, request: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
-        println!("Got a request: {:?}", request);
-        let response = espikey::GetResponse {
-            value: "Hello, world!".into(),
+        let request = request.into_inner();
+
+        let storage = self.storage.lock().unwrap();
+        let response = match storage.get(&request.key) {
+            Some(v) => espikey::GetResponse {
+                status: espikey::Status::Ok.into(),
+                value: Some(v.to_vec()),
+            },
+            None => espikey::GetResponse {
+                status: espikey::Status::NotFound.into(),
+                value: None,
+            },
         };
         Ok(Response::new(response))
     }
 
     async fn set(&self, request: Request<SetRequest>) -> Result<Response<SetResponse>, Status> {
-        println!("Got a request: {:?}", request);
-        let response = espikey::SetResponse { status: 1 };
+        let request = request.into_inner();
+        {
+            let mut storage = self.storage.lock().unwrap();
+            storage.set(request.key, request.value);
+        }
+
+        let response = espikey::SetResponse {
+            status: espikey::Status::Ok.into(),
+        };
         Ok(Response::new(response))
     }
 }
@@ -30,7 +51,9 @@ impl KvService for EspikeyServer {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let addr = "[::1]:50051".parse()?;
-    let espikey_svc = EspikeyServer::default();
+    let espikey_svc = EspikeyServer {
+        storage: Arc::new(Mutex::new(InMemoryStorage::new())),
+    };
 
     Server::builder()
         .add_service(KvServiceServer::new(espikey_svc))
