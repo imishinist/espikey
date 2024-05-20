@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use tonic::{transport::Server, Request, Response, Status};
 
@@ -12,7 +12,7 @@ pub mod espikey {
 
 #[derive(Debug)]
 struct EspikeyServer {
-    storage: Arc<Mutex<InMemoryStorage>>,
+    storage: Arc<RwLock<InMemoryStorage>>,
 }
 
 #[tonic::async_trait]
@@ -20,7 +20,7 @@ impl KvService for EspikeyServer {
     async fn get(&self, request: Request<GetRequest>) -> Result<Response<GetResponse>, Status> {
         let request = request.into_inner();
 
-        let storage = self.storage.lock().unwrap();
+        let storage = self.storage.read().unwrap();
         let response = match storage.get(&request.key) {
             Some(v) => espikey::GetResponse {
                 status: espikey::Status::Ok.into(),
@@ -37,7 +37,7 @@ impl KvService for EspikeyServer {
     async fn set(&self, request: Request<SetRequest>) -> Result<Response<SetResponse>, Status> {
         let request = request.into_inner();
         {
-            let mut storage = self.storage.lock().unwrap();
+            let mut storage = self.storage.write().unwrap();
             storage.set(request.key, request.value);
         }
 
@@ -52,7 +52,7 @@ impl KvService for EspikeyServer {
 async fn main() -> anyhow::Result<()> {
     let addr = "[::1]:50051".parse()?;
     let espikey_svc = EspikeyServer {
-        storage: Arc::new(Mutex::new(InMemoryStorage::new())),
+        storage: Arc::new(RwLock::new(InMemoryStorage::new())),
     };
 
     Server::builder()
