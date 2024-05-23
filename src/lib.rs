@@ -2,6 +2,65 @@ use std::{collections::HashMap, io::Write};
 
 use itertools::Itertools;
 
+struct BlockBuilder {
+    buf: Vec<u8>,
+    restarts: Vec<u32>,
+    last_key: Vec<u8>,
+
+    counter: usize,
+    block_restart_interval: usize,
+}
+
+impl BlockBuilder {
+    fn new(block_restart_interval: usize) -> Self {
+        BlockBuilder {
+            buf: Vec::new(),
+            restarts: vec![0],
+            last_key: Vec::new(),
+            counter: 0,
+            block_restart_interval,
+        }
+    }
+
+    fn add(&mut self, key: &[u8], value: &[u8]) {
+        let mut shared = 0;
+        if self.counter < self.block_restart_interval {
+            let min_length = std::cmp::min(key.len(), self.last_key.len());
+            while shared < min_length && key[shared] == self.last_key[shared] {
+                shared += 1;
+            }
+        } else {
+            self.restarts.push(self.buf.len() as u32);
+            self.counter = 0;
+        }
+        let non_shared = key.len() - shared;
+
+        // TODO: varint32 for shared, non_shared and value length
+        self.buf.extend_from_slice(&(shared as u32).to_le_bytes());
+        self.buf
+            .extend_from_slice(&(non_shared as u32).to_le_bytes());
+        self.buf
+            .extend_from_slice(&(value.len() as u32).to_le_bytes());
+        self.buf.extend_from_slice(&key[shared..]);
+        self.buf.extend_from_slice(&value);
+
+        self.last_key = key.to_vec();
+        self.counter += 1;
+    }
+
+    fn finish(mut self) -> Vec<u8> {
+        // Write restarts
+        for restart in self.restarts.iter() {
+            self.buf.extend_from_slice(&restart.to_le_bytes());
+        }
+
+        let len = self.restarts.len() as u32;
+        self.buf.extend_from_slice(&len.to_le_bytes());
+
+        self.buf
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ValueItem<T> {
     Deletion,
@@ -169,5 +228,30 @@ mod tests {
                 b'v', b'a', b'l', b'u', b'e', b'2',
             ]
         )
+    }
+
+    #[test]
+    fn test_block_builder() {
+        let restart_interval = 2;
+        let mut block_builder = BlockBuilder::new(restart_interval);
+        block_builder.add(b"key1", b"value1");
+        block_builder.add(b"key2", b"value2");
+        block_builder.add(b"key0", b"value0");
+
+        let block = block_builder.finish();
+        let restart_offset = 4 /* fixed byte */ * 3 /* three field */ * restart_interval as u8
+            + b"key1value1".len() as u8
+            + b"2value2".len() as u8;
+
+        #[rustfmt::skip]
+        assert_eq!(
+            block,
+            vec![
+                0, 0, 0, 0, 4, 0, 0, 0, 6, 0, 0, 0, b'k', b'e', b'y', b'1', b'v', b'a', b'l', b'u', b'e', b'1',
+                3, 0, 0, 0, 1, 0, 0, 0, 6, 0, 0, 0, b'2', b'v', b'a', b'l', b'u', b'e', b'2',
+                0, 0, 0, 0, 4, 0, 0, 0, 6, 0, 0, 0, b'k', b'e', b'y', b'0', b'v', b'a', b'l', b'u', b'e', b'0',
+                0, 0, 0, 0, restart_offset, 0, 0, 0, 2, 0, 0, 0
+            ]
+        );
     }
 }
