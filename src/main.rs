@@ -50,7 +50,7 @@ impl KvService for EspikeyServer {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let addr = "[::1]:50051".parse()?;
+    let addr = "0.0.0.0:50051".parse()?;
     let espikey_svc = EspikeyServer {
         storage: Arc::new(RwLock::new(MemTable::new())),
     };
