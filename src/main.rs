@@ -1,5 +1,8 @@
+use std::fs::OpenOptions;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use clap::Parser;
 use tonic::{transport::Server, Request, Response, Status};
 
 use ::espikey::DB;
@@ -48,9 +51,27 @@ impl KvService for EspikeyServer {
     }
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about=None)]
+#[clap(propagate_version = true)]
+struct EspikeyCli {
+    #[clap(short, long, default_value_t = 50051)]
+    port: u16,
+
+    #[clap(short, long, default_value = "espikey.log")]
+    file: PathBuf,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let addr = "0.0.0.0:50061".parse()?;
+    let args = EspikeyCli::parse();
+    println!("Starting Espikey server on port {}", args.port);
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&args.file)?;
+
+    let addr = format!("[::1]:{}", args.port).parse()?;
     let espikey_svc = EspikeyServer {
         storage: Arc::new(RwLock::new(DB::open())),
     };
