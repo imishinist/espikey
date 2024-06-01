@@ -21,6 +21,7 @@
     },
     "ghcr.io/devcontainers-contrib/features/grpcurl-asdf:2": {}
   },
+  "updateContentCommand": "sh -c 'cargo build'",  
   "forwardPorts": [50051],
   "customizations": {
     "vscode": {
