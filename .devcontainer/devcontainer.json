@@ -18,9 +18,9 @@
     "ghcr.io/devcontainers-contrib/features/protoc:1": {},
     "ghcr.io/devcontainers/features/sshd:1": {
       "version": "latest"
-    },
-    "ghcr.io/devcontainers-contrib/features/grpcurl-asdf:2": {}
+    }
   },
+  "onCreateCommand": "sh -c 'cargo install cargo-binstall && cargo binstall -y --force --locked cargo-watch'",
   "updateContentCommand": "sh -c 'cargo build'",  
   "forwardPorts": [50051],
   "customizations": {
