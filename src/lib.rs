@@ -2,6 +2,46 @@ use std::{collections::HashMap, io::Write};
 
 use itertools::Itertools;
 
+pub type Result<T> = anyhow::Result<T, Status>;
+
+pub enum Status {
+    NotFound,
+    Corruption,
+    NotSupported,
+    InvalidArgument,
+    IOError,
+}
+
+#[derive(Debug)]
+pub struct DB {
+    mem_table: MemTable,
+}
+
+impl DB {
+    pub fn open() -> Self {
+        DB {
+            mem_table: MemTable::default(),
+        }
+    }
+
+    pub fn get(&self, key: &[u8]) -> Result<Vec<u8>> {
+        self.mem_table
+            .get(key)
+            .map(|v| v.to_vec())
+            .ok_or(Status::NotFound)
+    }
+
+    pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.mem_table.set(key, value);
+        Ok(())
+    }
+
+    pub fn delete(&mut self, key: &[u8]) -> Result<()> {
+        self.mem_table.delete(key);
+        Ok(())
+    }
+}
+
 #[allow(dead_code)]
 struct BlockBuilder {
     buf: Vec<u8>,

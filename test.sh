@@ -2,12 +2,14 @@
 
 set -e
 
+port="50061"
+
 key=$(echo -n "message" | base64)
 result=$(grpcurl \
   -plaintext \
   -import-path ./grpc/ \
   -proto espikey.proto -d "{\"key\":\"${key}\"}" \
-  '[::]:50051' \
+  "[::]:${port}" \
   espikey.KVService/Get | jq -r '.status')
 [ "$result" = "STATUS_NOT_FOUND" ]
 echo "get empty key: OK"
@@ -17,7 +19,7 @@ result=$(grpcurl \
   -plaintext \
   -import-path ./grpc/ \
   -proto espikey.proto -d "{\"key\":\"${key}\", \"value\":\"${value}\"}" \
-  '[::]:50051' \
+  "[::]:${port}" \
   espikey.KVService/Set | jq -r '.status')
 [ "$result" = "STATUS_OK" ]
 echo "set 'message' 'value': OK"
@@ -27,7 +29,7 @@ result=$(grpcurl \
   -plaintext \
   -import-path ./grpc/ \
   -proto espikey.proto -d "{\"key\":\"${key}\"}" \
-  '[::]:50051' \
+  "[::]:${port}" \
   espikey.KVService/Get | jq -r '.value' | base64 -d)
 [ "$result" = "Hey" ]
 echo "get 'message': OK"

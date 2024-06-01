@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use tonic::{transport::Server, Request, Response, Status};
 
-use ::espikey::MemTable;
+use ::espikey::DB;
 use espikey::kv_service_server::{KvService, KvServiceServer};
 use espikey::{GetRequest, GetResponse, SetRequest, SetResponse};
 
@@ -12,7 +12,7 @@ pub mod espikey {
 
 #[derive(Debug)]
 struct EspikeyServer {
-    storage: Arc<RwLock<MemTable>>,
+    storage: Arc<RwLock<DB>>,
 }
 
 #[tonic::async_trait]
@@ -22,11 +22,11 @@ impl KvService for EspikeyServer {
 
         let storage = self.storage.read().unwrap();
         let response = match storage.get(&request.key) {
-            Some(v) => espikey::GetResponse {
+            Ok(v) => espikey::GetResponse {
                 status: espikey::Status::Ok.into(),
-                value: Some(v.to_vec()),
+                value: Some(v),
             },
-            None => espikey::GetResponse {
+            Err(_status) => espikey::GetResponse {
                 status: espikey::Status::NotFound.into(),
                 value: None,
             },
@@ -38,7 +38,7 @@ impl KvService for EspikeyServer {
         let request = request.into_inner();
         {
             let mut storage = self.storage.write().unwrap();
-            storage.set(&request.key, &request.value);
+            let _ = storage.put(&request.key, &request.value);
         }
 
         let response = espikey::SetResponse {
@@ -50,9 +50,9 @@ impl KvService for EspikeyServer {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let addr = "0.0.0.0:50051".parse()?;
+    let addr = "0.0.0.0:50061".parse()?;
     let espikey_svc = EspikeyServer {
-        storage: Arc::new(RwLock::new(MemTable::default())),
+        storage: Arc::new(RwLock::new(DB::open())),
     };
 
     Server::builder()
