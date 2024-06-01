@@ -52,7 +52,7 @@ impl KvService for EspikeyServer {
 async fn main() -> anyhow::Result<()> {
     let addr = "0.0.0.0:50051".parse()?;
     let espikey_svc = EspikeyServer {
-        storage: Arc::new(RwLock::new(MemTable::new())),
+        storage: Arc::new(RwLock::new(MemTable::default())),
     };
 
     Server::builder()

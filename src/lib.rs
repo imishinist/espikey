@@ -2,6 +2,7 @@ use std::{collections::HashMap, io::Write};
 
 use itertools::Itertools;
 
+#[allow(dead_code)]
 struct BlockBuilder {
     buf: Vec<u8>,
     restarts: Vec<u32>,
@@ -11,6 +12,7 @@ struct BlockBuilder {
     block_restart_interval: usize,
 }
 
+#[allow(dead_code)]
 impl BlockBuilder {
     fn new(block_restart_interval: usize) -> Self {
         BlockBuilder {
@@ -42,7 +44,7 @@ impl BlockBuilder {
         self.buf
             .extend_from_slice(&(value.len() as u32).to_le_bytes());
         self.buf.extend_from_slice(&key[shared..]);
-        self.buf.extend_from_slice(&value);
+        self.buf.extend_from_slice(value);
 
         self.last_key = key.to_vec();
         self.counter += 1;
@@ -83,7 +85,7 @@ impl<T> ValueItem<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MemTable {
     total_bytes: usize,
     entry_count: usize,
@@ -91,14 +93,6 @@ pub struct MemTable {
 }
 
 impl MemTable {
-    pub fn new() -> Self {
-        MemTable {
-            total_bytes: 0,
-            entry_count: 0,
-            items: HashMap::new(),
-        }
-    }
-
     pub fn get<'a>(&'a self, key: &[u8]) -> Option<&'a [u8]> {
         self.items.get(key).and_then(|v| match v {
             ValueItem::Deletion => None,
@@ -139,7 +133,7 @@ impl MemTable {
             });
     }
 
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item = (&'a [u8], ValueItem<&'a [u8]>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&[u8], ValueItem<&[u8]>)> {
         self.items
             .iter()
             .sorted_by(|(k1, _), (k2, _)| k1.cmp(k2))
@@ -184,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_memtable() {
-        let mut memtable = MemTable::new();
+        let mut memtable = MemTable::default();
         memtable.set(b"key1", b"value1");
         memtable.set(b"key2", b"value2");
         memtable.set(b"key0", b"value");
@@ -209,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_serialize_memtable() {
-        let mut memtable = MemTable::new();
+        let mut memtable = MemTable::default();
         memtable.set(b"key1", b"value1");
         memtable.set(b"key2", b"value2");
         memtable.set(b"key0", b"value0");
