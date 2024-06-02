@@ -1,30 +1,50 @@
 use std::fs::File;
+use std::path::PathBuf;
 use std::{collections::HashMap, io::Write};
 
 use itertools::Itertools;
+use thiserror::Error;
 
 mod log;
+mod write_batch;
 
 pub type Result<T> = anyhow::Result<T, Status>;
 
+#[derive(Debug, Error)]
 pub enum Status {
+    #[error("Not found")]
     NotFound,
+    #[error("Corruption")]
     Corruption,
+    #[error("Not supported")]
     NotSupported,
+    #[error("Invalid argument")]
     InvalidArgument,
-    IOError,
+    #[error("IO error")]
+    IOError(#[from] std::io::Error),
 }
 
 #[derive(Debug)]
 pub struct DB {
     mem_table: MemTable,
+    log_writer: log::Writer,
+
+    sequence: u64,
 }
 
 impl DB {
-    pub fn open() -> Self {
-        DB {
+    pub fn open(db_path: impl Into<PathBuf>) -> Result<Self> {
+        let db_path = db_path.into();
+
+        let log_file = File::create(db_path.join("espikey.wal"))?;
+        let log_writer = log::Writer::new(log_file);
+        Ok(DB {
             mem_table: MemTable::default(),
-        }
+            log_writer,
+
+            // TODO: from manifest
+            sequence: 0,
+        })
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Vec<u8>> {
@@ -35,14 +55,107 @@ impl DB {
     }
 
     pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
+        let mut wb = write_batch::WriteBatch::new();
+        wb.put(key, value);
+        self.write(wb)?;
+
         self.mem_table.set(key, value);
         Ok(())
     }
 
     pub fn delete(&mut self, key: &[u8]) -> Result<()> {
+        let mut wb = write_batch::WriteBatch::new();
+        wb.delete(key);
+        self.write(wb)?;
+
         self.mem_table.delete(key);
         Ok(())
     }
+
+    fn write(&mut self, mut wb: write_batch::WriteBatch) -> Result<()> {
+        let mut last_sequence = self.sequence;
+
+        wb.set_sequence(last_sequence + 1);
+        last_sequence += wb.get_count() as u64;
+        self.log_writer.append(wb.get_contents()).unwrap();
+
+        // TODO: sync
+        // TODO: Insert write_batch into memtable
+
+        self.sequence = last_sequence;
+        Ok(())
+    }
+}
+
+pub(crate) fn put_varint32(buf: &mut Vec<u8>, mut value: u32) -> usize {
+    let mut cnt = 0;
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        buf.push(byte);
+        cnt += 1;
+
+        if value == 0 {
+            break;
+        }
+    }
+    cnt
+}
+
+#[test]
+fn test_put_varint32() {
+    let mut buf = Vec::new();
+    put_varint32(&mut buf, 127);
+    assert_eq!(buf, vec![127]);
+    buf.clear();
+
+    let mut buf = Vec::new();
+    put_varint32(&mut buf, 128);
+    assert_eq!(buf, vec![0x80, 0x01]);
+}
+
+#[allow(dead_code)]
+pub(crate) fn put_fixed32(buf: &mut Vec<u8>, value: u32) {
+    buf.extend_from_slice(&value.to_le_bytes());
+}
+
+#[allow(dead_code)]
+pub(crate) fn put_fixed64(buf: &mut Vec<u8>, value: u64) {
+    buf.extend_from_slice(&value.to_le_bytes());
+}
+
+pub(crate) fn encode_fixed32(buf: &mut [u8], value: u32) {
+    buf.copy_from_slice(&value.to_le_bytes());
+}
+
+pub(crate) fn encode_fixed64(buf: &mut [u8], value: u64) {
+    buf.copy_from_slice(&value.to_le_bytes());
+}
+
+pub(crate) fn decode_fixed32(data: &[u8]) -> u32 {
+    assert!(
+        data.len() >= 4,
+        "data length must be greater than or equal to 4"
+    );
+    u32::from_le_bytes([data[0], data[1], data[2], data[3]])
+}
+
+pub(crate) fn decode_fixed64(data: &[u8]) -> u64 {
+    assert!(
+        data.len() >= 8,
+        "data length must be greater than or equal to 8"
+    );
+    u64::from_le_bytes([
+        data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+    ])
+}
+
+pub(crate) fn put_length_prefixed_slice(buf: &mut Vec<u8>, data: &[u8]) {
+    put_varint32(buf, data.len() as u32);
+    buf.extend_from_slice(data);
 }
 
 #[allow(dead_code)]

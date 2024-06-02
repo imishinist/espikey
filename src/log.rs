@@ -7,6 +7,7 @@ const HEADER_SIZE: usize = 7;
 #[derive(Debug)]
 #[repr(u8)]
 pub(crate) enum RecordType {
+    #[allow(dead_code)]
     Zero = 0,
     Full = 1,
     First = 2,

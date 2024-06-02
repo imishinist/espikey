@@ -1,4 +1,3 @@
-use std::fs::OpenOptions;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -58,22 +57,18 @@ struct EspikeyCli {
     #[clap(short, long, default_value_t = 50051)]
     port: u16,
 
-    #[clap(short, long, default_value = "espikey.log")]
-    file: PathBuf,
+    #[clap(short, long, default_value = "espikey.db")]
+    dir: PathBuf,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = EspikeyCli::parse();
     println!("Starting Espikey server on port {}", args.port);
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&args.file)?;
 
     let addr = format!("[::1]:{}", args.port).parse()?;
     let espikey_svc = EspikeyServer {
-        storage: Arc::new(RwLock::new(DB::open())),
+        storage: Arc::new(RwLock::new(DB::open(args.dir).unwrap())),
     };
 
     Server::builder()
