@@ -2,6 +2,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::{collections::HashMap, io::Write};
 
+use crate::write_batch::WriteBatch;
 use itertools::Itertools;
 use thiserror::Error;
 
@@ -30,6 +31,7 @@ pub struct DB {
     log_writer: log::Writer,
 
     sequence: u64,
+    wb: WriteBatch,
 }
 
 impl DB {
@@ -44,6 +46,7 @@ impl DB {
 
             // TODO: from manifest
             sequence: 0,
+            wb: WriteBatch::new(),
         })
     }
 
@@ -54,32 +57,34 @@ impl DB {
             .ok_or(Status::NotFound)
     }
 
-    pub fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut wb = write_batch::WriteBatch::new();
-        wb.put(key, value);
-        self.write(wb)?;
+    pub fn put(&mut self, key: &[u8], value: &[u8], sync: bool) -> Result<()> {
+        self.wb.clear();
+        self.wb.put(key, value);
+        self.write(sync)?;
 
         self.mem_table.set(key, value);
         Ok(())
     }
 
-    pub fn delete(&mut self, key: &[u8]) -> Result<()> {
-        let mut wb = write_batch::WriteBatch::new();
-        wb.delete(key);
-        self.write(wb)?;
+    pub fn delete(&mut self, key: &[u8], sync: bool) -> Result<()> {
+        self.wb.clear();
+        self.wb.delete(key);
+        self.write(sync)?;
 
         self.mem_table.delete(key);
         Ok(())
     }
 
-    fn write(&mut self, mut wb: write_batch::WriteBatch) -> Result<()> {
+    fn write(&mut self, sync: bool) -> Result<()> {
         let mut last_sequence = self.sequence;
 
-        wb.set_sequence(last_sequence + 1);
-        last_sequence += wb.get_count() as u64;
-        self.log_writer.append(wb.get_contents()).unwrap();
+        self.wb.set_sequence(last_sequence + 1);
+        last_sequence += self.wb.get_count() as u64;
+        self.log_writer.append(self.wb.get_contents())?;
 
-        // TODO: sync
+        if sync {
+            self.log_writer.sync()?;
+        }
         // TODO: Insert write_batch into memtable
 
         self.sequence = last_sequence;
@@ -128,10 +133,18 @@ pub(crate) fn put_fixed64(buf: &mut Vec<u8>, value: u64) {
 }
 
 pub(crate) fn encode_fixed32(buf: &mut [u8], value: u32) {
+    assert!(
+        buf.len() >= 4,
+        "buf length must be greater than or equal to 4"
+    );
     buf.copy_from_slice(&value.to_le_bytes());
 }
 
 pub(crate) fn encode_fixed64(buf: &mut [u8], value: u64) {
+    assert!(
+        buf.len() >= 8,
+        "buf length must be greater than or equal to 8"
+    );
     buf.copy_from_slice(&value.to_le_bytes());
 }
 

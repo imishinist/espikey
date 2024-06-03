@@ -40,7 +40,7 @@ impl KvService for EspikeyServer {
         let request = request.into_inner();
         {
             let mut storage = self.storage.write().unwrap();
-            let _ = storage.put(&request.key, &request.value);
+            let _ = storage.put(&request.key, &request.value, true);
         }
 
         let response = espikey::SetResponse {

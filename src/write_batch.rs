@@ -19,6 +19,11 @@ impl WriteBatch {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.rep.clear();
+        self.rep.resize(8 + 4, 0);
+    }
+
     pub fn set_sequence(&mut self, sequence: u64) {
         encode_fixed64(&mut self.rep[0..8], sequence);
     }

@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::io::Write;
 
+use crate::Result;
+
 const BLOCK_SIZE: usize = 32768;
 const HEADER_SIZE: usize = 7;
 
@@ -29,7 +31,12 @@ impl Writer {
         }
     }
 
-    pub(crate) fn append(&mut self, message: &[u8]) -> anyhow::Result<()> {
+    pub(crate) fn sync(&mut self) -> Result<()> {
+        self.file.sync_all()?;
+        Ok(())
+    }
+
+    pub(crate) fn append(&mut self, message: &[u8]) -> Result<()> {
         let mut remains_message_bytes = message.len();
         let mut offset = 0;
         let mut begin = true;
@@ -65,7 +72,7 @@ impl Writer {
         Ok(())
     }
 
-    fn write(&mut self, record_type: RecordType, message: &[u8]) -> anyhow::Result<()> {
+    fn write(&mut self, record_type: RecordType, message: &[u8]) -> Result<()> {
         assert!(message.len() <= 0xffff);
         assert!(self.block_offset + HEADER_SIZE + message.len() <= BLOCK_SIZE);
 
