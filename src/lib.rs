@@ -6,8 +6,8 @@ use crate::write_batch::WriteBatch;
 use itertools::Itertools;
 use thiserror::Error;
 
-mod log;
-mod write_batch;
+pub mod log;
+pub mod write_batch;
 
 pub type Result<T> = anyhow::Result<T, Status>;
 
@@ -410,7 +410,7 @@ pub fn serialize_to_sstable<W: Write>(writer: &mut W, memtable: MemTable) -> any
                 let tag = 1u64;
                 write_fixed64(writer, tag)?;
                 write_fixed32(writer, v.len() as u32)?;
-                
+
                 writer.write_all(v)?;
             }
         }

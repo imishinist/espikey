@@ -16,6 +16,12 @@ pub struct WriteBatch {
     rep: Vec<u8>,
 }
 
+impl Default for WriteBatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WriteBatch {
     pub fn new() -> Self {
         Self {
@@ -36,7 +42,6 @@ impl WriteBatch {
         encode_fixed32(&mut self.rep[8..WRITE_BATCH_HEADER_SIZE], count);
     }
 
-    #[allow(dead_code)]
     pub fn get_sequence(&self) -> u64 {
         decode_fixed64(&self.rep[0..8])
     }
@@ -81,6 +86,14 @@ impl WriteBatch {
     pub fn iter(&self) -> impl Iterator<Item = Result<ValueType<'_>>> {
         WriteBatchIter::new(self)
     }
+
+    pub fn from(rep: impl Into<Vec<u8>>) -> Result<Self> {
+        let rep = rep.into();
+        if rep.len() < WRITE_BATCH_HEADER_SIZE {
+            return Err(Status::Corruption);
+        }
+        Ok(Self { rep: rep.to_vec() })
+    }
 }
 
 pub(crate) struct WriteBatchIter<'a> {
@@ -91,7 +104,10 @@ pub(crate) struct WriteBatchIter<'a> {
 impl<'a> WriteBatchIter<'a> {
     pub fn new(wb: &'a WriteBatch) -> Self {
         assert!(wb.rep.len() >= WRITE_BATCH_HEADER_SIZE);
-        Self { wb, offset: WRITE_BATCH_HEADER_SIZE }
+        Self {
+            wb,
+            offset: WRITE_BATCH_HEADER_SIZE,
+        }
     }
 }
 
@@ -127,7 +143,7 @@ impl<'a> Iterator for WriteBatchIter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::write_batch::{ValueTypeCode, WRITE_BATCH_HEADER_SIZE, WriteBatch};
+    use crate::write_batch::{ValueTypeCode, WriteBatch, WRITE_BATCH_HEADER_SIZE};
     use crate::ValueType;
 
     #[test]

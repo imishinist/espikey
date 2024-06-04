@@ -1,9 +1,9 @@
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 
 use zerocopy::{AsBytes, FromBytes, FromZeroes, Unaligned};
 
-use crate::Result;
+use crate::{Result, Status};
 
 const BLOCK_SIZE: usize = 32768;
 const HEADER_SIZE: usize = 7;
@@ -102,6 +102,130 @@ impl Writer {
     }
 }
 
+pub struct Reader {
+    file: File,
+
+    buffer_offset: usize,
+    buffer_length: usize,
+    buffer: [u8; BLOCK_SIZE],
+
+    eof: bool,
+}
+
+impl Reader {
+    pub fn new(file: File) -> Reader {
+        Reader {
+            file,
+            buffer_offset: 0,
+            buffer_length: 0,
+            buffer: [0; BLOCK_SIZE],
+            eof: false,
+        }
+    }
+
+    pub fn read(&mut self) -> Result<Option<Vec<u8>>> {
+        let mut in_fragmented_record = false;
+
+        let mut fragment = Vec::new();
+        loop {
+            let (record_type, message) = match self.read_physical()? {
+                Some(v) => v,
+                // EOF
+                None => return Ok(None),
+            };
+
+            match record_type {
+                RecordType::Full => {
+                    if in_fragmented_record {
+                        return Err(Status::Corruption);
+                    }
+                    return Ok(Some(message.to_vec()));
+                }
+                RecordType::First => {
+                    if in_fragmented_record {
+                        return Err(Status::Corruption);
+                    }
+                    in_fragmented_record = true;
+                    fragment.extend(message);
+                }
+                RecordType::Middle => {
+                    if !in_fragmented_record {
+                        return Err(Status::Corruption);
+                    }
+                    fragment.extend(message);
+                }
+                RecordType::Last => {
+                    if !in_fragmented_record {
+                        return Err(Status::Corruption);
+                    }
+                    fragment.extend(message);
+                    return Ok(Some(fragment));
+                }
+                _ => return Err(Status::Corruption),
+            }
+        }
+    }
+
+    fn read_physical(&mut self) -> Result<Option<(RecordType, &[u8])>> {
+        loop {
+            if self.buffer_length - self.buffer_offset < HEADER_SIZE {
+                if self.eof {
+                    return Ok(None);
+                }
+                self.buffer_offset = 0;
+                let nreads = match self.file.read(&mut self.buffer) {
+                    Ok(n) if n < BLOCK_SIZE => {
+                        self.eof = true;
+                        n
+                    }
+                    Ok(n) => n,
+                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(e.into()),
+                };
+                self.buffer_length = nreads;
+                continue;
+            }
+            let header = WalHeader::read_from(
+                &self.buffer[self.buffer_offset..self.buffer_offset + HEADER_SIZE],
+            )
+            .unwrap();
+            let length = header.length as usize;
+
+            if length + HEADER_SIZE > self.buffer_length - self.buffer_offset {
+                self.buffer_offset = 0;
+                self.buffer_length = 0;
+                if !self.eof {
+                    return Err(Status::Corruption);
+                }
+                return Ok(None);
+            }
+            if header.record_type == RecordType::Zero as u8 && length == 0 {
+                self.buffer_offset = 0;
+                self.buffer_length = 0;
+                return Err(Status::Corruption);
+            }
+
+            // TODO: check checksum
+
+            let record_offset = self.buffer_offset + HEADER_SIZE;
+            self.buffer_offset += HEADER_SIZE + length;
+
+            let record_type = match header.record_type {
+                x if x == RecordType::Full as u8 => RecordType::Full,
+                x if x == RecordType::First as u8 => RecordType::First,
+                x if x == RecordType::Middle as u8 => RecordType::Middle,
+                x if x == RecordType::Last as u8 => RecordType::Last,
+                _ => return Err(Status::Corruption),
+            };
+
+            return Ok(Some((
+                record_type,
+                &self.buffer[record_offset..record_offset + length],
+            )));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +247,7 @@ mod tests {
         writer.append(&a).unwrap();
         writer.append(&b).unwrap();
         writer.append(&c).unwrap();
+        writer.sync().unwrap();
         drop(writer);
 
         let file = OpenOptions::new()
@@ -133,5 +258,64 @@ mod tests {
 
         let file_size = file.metadata().unwrap().len();
         assert_eq!(file_size / BLOCK_SIZE as u64, 3);
+    }
+
+    #[test]
+    fn test_reader() {
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open("/tmp/test_reader.log")
+            .unwrap();
+        let mut writer = Writer::new(file);
+
+        writer.append(b"hello world").unwrap();
+        drop(writer);
+
+        let file = OpenOptions::new()
+            .read(true)
+            .open("/tmp/test_reader.log")
+            .unwrap();
+
+        let mut reader = Reader::new(file);
+        assert_eq!(reader.read(), Ok(Some(b"hello world".to_vec())));
+    }
+
+    #[test]
+    fn test_wal() {
+        let file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open("/tmp/test_wal.log")
+            .unwrap();
+        let table = [1, HEADER_SIZE - 1, BLOCK_SIZE - 1, BLOCK_SIZE * 2 - 1];
+
+        let mut writer = Writer::new(file);
+        for size in table {
+            for d in [0, 1, 2] {
+                let i = size + d;
+                let value = i % 0xff;
+                let message = vec![value as u8; i];
+                assert_eq!(writer.append(&message), Ok(()));
+            }
+        }
+        assert_eq!(writer.sync(), Ok(()));
+        drop(writer);
+
+        let file = OpenOptions::new()
+            .read(true)
+            .open("/tmp/test_wal.log")
+            .unwrap();
+        let mut reader = Reader::new(file);
+
+        for size in table {
+            for d in [0, 1, 2] {
+                let i = size + d;
+                let value = i % 0xff;
+                let message = vec![value as u8; i];
+                assert_eq!(reader.read(), Ok(Some(message)));
+            }
+        }
+        assert_eq!(reader.read(), Ok(None));
     }
 }
