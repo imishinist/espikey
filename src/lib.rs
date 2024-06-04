@@ -268,12 +268,10 @@ impl BlockBuilder {
         }
         let non_shared = key.len() - shared;
 
-        // TODO: varint32 for shared, non_shared and value length
-        self.buf.extend_from_slice(&(shared as u32).to_le_bytes());
-        self.buf
-            .extend_from_slice(&(non_shared as u32).to_le_bytes());
-        self.buf
-            .extend_from_slice(&(value.len() as u32).to_le_bytes());
+        put_varint32(&mut self.buf, shared as u32);
+        put_varint32(&mut self.buf, non_shared as u32);
+        put_varint32(&mut self.buf, value.len() as u32);
+
         self.buf.extend_from_slice(&key[shared..]);
         self.buf.extend_from_slice(value);
 
@@ -373,10 +371,14 @@ impl MemTable {
 }
 
 pub fn serialize_to_sstable<W: Write>(writer: &mut W, memtable: MemTable) -> anyhow::Result<()> {
+    let mut tmp = vec![];
+
     writer.write_all(&(memtable.entry_count as u32).to_le_bytes())?;
     for (k, v) in memtable.iter() {
-        // TODO: varint32 for key and value length
-        writer.write_all(&(k.len() as u32).to_le_bytes())?;
+        let bytes = put_varint32(&mut tmp, k.len() as u32);
+        writer.write_all(&tmp[..bytes])?;
+        tmp.clear();
+        
         writer.write_all(k)?;
 
         match v {
@@ -433,6 +435,7 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn test_serialize_memtable() {
         let mut memtable = MemTable::default();
         memtable.set(b"key1", b"value1");
@@ -447,10 +450,9 @@ mod tests {
             buf,
             vec![
                 3, 0, 0, 0, // entry count
-                4, 0, 0, 0, b'k', b'e', b'y', b'0', 1, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, b'v', b'a',
-                b'l', b'u', b'e', b'0', 4, 0, 0, 0, b'k', b'e', b'y', b'1', 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 4, 0, 0, 0, b'k', b'e', b'y', b'2', 1, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0,
-                b'v', b'a', b'l', b'u', b'e', b'2',
+                4, b'k', b'e', b'y', b'0', 1, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, b'v', b'a', b'l', b'u', b'e', b'0',
+                4, b'k', b'e', b'y', b'1', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                4, b'k', b'e', b'y', b'2', 1, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, b'v', b'a', b'l', b'u', b'e', b'2',
             ]
         )
     }
@@ -464,7 +466,7 @@ mod tests {
         block_builder.add(b"key0", b"value0");
 
         let block = block_builder.finish();
-        let restart_offset = 4 /* fixed byte */ * 3 /* three field */ * restart_interval as u8
+        let restart_offset = 1 /* varint32 bytes */ * 3 /* three field */ * restart_interval as u8
             + b"key1value1".len() as u8
             + b"2value2".len() as u8;
 
@@ -472,9 +474,9 @@ mod tests {
         assert_eq!(
             block,
             vec![
-                0, 0, 0, 0, 4, 0, 0, 0, 6, 0, 0, 0, b'k', b'e', b'y', b'1', b'v', b'a', b'l', b'u', b'e', b'1',
-                3, 0, 0, 0, 1, 0, 0, 0, 6, 0, 0, 0, b'2', b'v', b'a', b'l', b'u', b'e', b'2',
-                0, 0, 0, 0, 4, 0, 0, 0, 6, 0, 0, 0, b'k', b'e', b'y', b'0', b'v', b'a', b'l', b'u', b'e', b'0',
+                0, 4, 6, b'k', b'e', b'y', b'1', b'v', b'a', b'l', b'u', b'e', b'1',
+                3, 1, 6, b'2', b'v', b'a', b'l', b'u', b'e', b'2',
+                0, 4, 6, b'k', b'e', b'y', b'0', b'v', b'a', b'l', b'u', b'e', b'0',
                 0, 0, 0, 0, restart_offset, 0, 0, 0, 2, 0, 0, 0
             ]
         );
