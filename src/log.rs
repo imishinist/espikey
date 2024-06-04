@@ -79,10 +79,10 @@ impl Writer {
         let length = message.len();
 
         let mut header = [0; HEADER_SIZE];
+        let checksum = crc32fast::hash(message);
+        header[0..4].copy_from_slice(&checksum.to_le_bytes());
         header[4..6].copy_from_slice(&(message.len() as u16).to_le_bytes());
         header[6] = record_type as u8;
-
-        // TODO: checksum (crc32c)
 
         self.file.write_all(&header)?;
         self.file.write_all(message)?;
