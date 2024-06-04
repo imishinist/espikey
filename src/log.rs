@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::io::Write;
 
+use zerocopy::{AsBytes, FromBytes, FromZeroes, Unaligned};
+
 use crate::Result;
 
 const BLOCK_SIZE: usize = 32768;
@@ -15,6 +17,14 @@ pub(crate) enum RecordType {
     First = 2,
     Middle = 3,
     Last = 4,
+}
+
+#[derive(Debug, Unaligned, AsBytes, FromBytes, FromZeroes)]
+#[repr(C, packed)]
+struct WalHeader {
+    checksum: u32,
+    length: u16,
+    record_type: u8,
 }
 
 #[derive(Debug)]
@@ -77,14 +87,13 @@ impl Writer {
         assert!(self.block_offset + HEADER_SIZE + message.len() <= BLOCK_SIZE);
 
         let length = message.len();
+        let wal_header = WalHeader {
+            checksum: crc32fast::hash(message),
+            length: length as u16,
+            record_type: record_type as u8,
+        };
 
-        let mut header = [0; HEADER_SIZE];
-        let checksum = crc32fast::hash(message);
-        header[0..4].copy_from_slice(&checksum.to_le_bytes());
-        header[4..6].copy_from_slice(&(message.len() as u16).to_le_bytes());
-        header[6] = record_type as u8;
-
-        self.file.write_all(&header)?;
+        self.file.write_all(wal_header.as_bytes())?;
         self.file.write_all(message)?;
         self.file.flush()?;
 

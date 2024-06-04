@@ -9,6 +9,8 @@ enum ValueTypeCode {
     Value = 1,
 }
 
+const WRITE_BATCH_HEADER_SIZE: usize = 12;
+
 #[derive(Debug)]
 pub struct WriteBatch {
     rep: Vec<u8>,
@@ -17,13 +19,13 @@ pub struct WriteBatch {
 impl WriteBatch {
     pub fn new() -> Self {
         Self {
-            rep: vec![0; 8 + 4],
+            rep: vec![0; WRITE_BATCH_HEADER_SIZE],
         }
     }
 
     pub fn clear(&mut self) {
         self.rep.clear();
-        self.rep.resize(8 + 4, 0);
+        self.rep.resize(WRITE_BATCH_HEADER_SIZE, 0);
     }
 
     pub fn set_sequence(&mut self, sequence: u64) {
@@ -31,7 +33,7 @@ impl WriteBatch {
     }
 
     pub fn set_count(&mut self, count: u32) {
-        encode_fixed32(&mut self.rep[8..12], count);
+        encode_fixed32(&mut self.rep[8..WRITE_BATCH_HEADER_SIZE], count);
     }
 
     #[allow(dead_code)]
@@ -40,7 +42,7 @@ impl WriteBatch {
     }
 
     pub fn get_count(&self) -> u32 {
-        decode_fixed32(&self.rep[8..12])
+        decode_fixed32(&self.rep[8..WRITE_BATCH_HEADER_SIZE])
     }
 
     pub fn get_contents(&self) -> &[u8] {
@@ -88,8 +90,8 @@ pub(crate) struct WriteBatchIter<'a> {
 
 impl<'a> WriteBatchIter<'a> {
     pub fn new(wb: &'a WriteBatch) -> Self {
-        assert!(wb.rep.len() >= 12);
-        Self { wb, offset: 12 }
+        assert!(wb.rep.len() >= WRITE_BATCH_HEADER_SIZE);
+        Self { wb, offset: WRITE_BATCH_HEADER_SIZE }
     }
 }
 
@@ -125,7 +127,7 @@ impl<'a> Iterator for WriteBatchIter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::write_batch::{ValueTypeCode, WriteBatch};
+    use crate::write_batch::{ValueTypeCode, WRITE_BATCH_HEADER_SIZE, WriteBatch};
     use crate::ValueType;
 
     #[test]
@@ -144,7 +146,7 @@ mod tests {
 
         #[rustfmt::skip]
         assert_eq!(
-            batch.rep[12..],
+            batch.rep[WRITE_BATCH_HEADER_SIZE..],
             vec![
                 ValueTypeCode::Value as u8, 4, b'k', b'e', b'y', b'1', 6, b'v', b'a', b'l', b'u', b'e', b'1',
                 ValueTypeCode::Value as u8, 4, b'k', b'e', b'y', b'2', 6, b'v', b'a', b'l', b'u', b'e', b'2',

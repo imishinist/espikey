@@ -137,6 +137,22 @@ pub(crate) fn put_varint32(buf: &mut Vec<u8>, mut value: u32) -> usize {
     cnt
 }
 
+pub(crate) fn write_varint32<W: Write>(writer: &mut W, mut value: u32) -> std::io::Result<usize> {
+    let mut cnt = 0;
+    while {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        writer.write_all(&[byte])?;
+        cnt += 1;
+
+        value != 0
+    } {}
+    Ok(cnt)
+}
+
 pub(crate) fn decode_varint32(buf: &[u8]) -> (u32, usize) {
     let mut value = 0;
     let mut shift = 0;
@@ -170,9 +186,19 @@ pub(crate) fn put_fixed32(buf: &mut Vec<u8>, value: u32) {
     buf.extend_from_slice(&value.to_le_bytes());
 }
 
+fn write_fixed32<W: Write>(writer: &mut W, value: u32) -> std::io::Result<()> {
+    writer.write_all(&value.to_le_bytes())?;
+    Ok(())
+}
+
 #[allow(dead_code)]
 pub(crate) fn put_fixed64(buf: &mut Vec<u8>, value: u64) {
     buf.extend_from_slice(&value.to_le_bytes());
+}
+
+fn write_fixed64<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
+    writer.write_all(&value.to_le_bytes())?;
+    Ok(())
 }
 
 pub(crate) fn encode_fixed32(buf: &mut [u8], value: u32) {
@@ -285,9 +311,7 @@ impl BlockBuilder {
             self.buf.extend_from_slice(&restart.to_le_bytes());
         }
 
-        let len = self.restarts.len() as u32;
-        self.buf.extend_from_slice(&len.to_le_bytes());
-
+        put_fixed32(&mut self.buf, self.restarts.len() as u32);
         self.buf
     }
 }
@@ -371,27 +395,22 @@ impl MemTable {
 }
 
 pub fn serialize_to_sstable<W: Write>(writer: &mut W, memtable: MemTable) -> anyhow::Result<()> {
-    let mut tmp = vec![];
-
-    writer.write_all(&(memtable.entry_count as u32).to_le_bytes())?;
+    write_fixed32(writer, memtable.entry_count as u32)?;
     for (k, v) in memtable.iter() {
-        let bytes = put_varint32(&mut tmp, k.len() as u32);
-        writer.write_all(&tmp[..bytes])?;
-        tmp.clear();
-        
+        write_varint32(writer, k.len() as u32)?;
         writer.write_all(k)?;
 
         match v {
             ValueItem::Deletion => {
                 let tag = 0u64;
-                writer.write_all(&tag.to_le_bytes())?;
-                writer.write_all(&0u32.to_le_bytes())?;
+                write_fixed64(writer, tag)?;
+                write_fixed32(writer, 0)?;
             }
             ValueItem::Value(v) => {
                 let tag = 1u64;
-                writer.write_all(&tag.to_le_bytes())?;
-
-                writer.write_all(&(v.len() as u32).to_le_bytes())?;
+                write_fixed64(writer, tag)?;
+                write_fixed32(writer, v.len() as u32)?;
+                
                 writer.write_all(v)?;
             }
         }
