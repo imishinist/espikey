@@ -25,6 +25,39 @@ pub enum Status {
     IOError(#[from] std::io::Error),
 }
 
+impl PartialEq<Self> for Status {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Status::NotFound, Status::NotFound) => true,
+            (Status::Corruption, Status::Corruption) => true,
+            (Status::NotSupported, Status::NotSupported) => true,
+            (Status::InvalidArgument, Status::InvalidArgument) => true,
+            (Status::IOError(e1), Status::IOError(e2)) => {
+                e1.kind() == e2.kind() && e1.to_string() == e2.to_string()
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Status {}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ValueType<'a> {
+    Deletion(&'a [u8]),
+    Value(&'a [u8], &'a [u8]),
+}
+
+impl<'a> ValueType<'a> {
+    pub fn deletion(key: &'a [u8]) -> Self {
+        ValueType::Deletion(key)
+    }
+
+    pub fn value(v1: &'a [u8], v2: &'a [u8]) -> Self {
+        ValueType::Value(v1, v2)
+    }
+}
+
 #[derive(Debug)]
 pub struct DB {
     mem_table: MemTable,
@@ -61,8 +94,6 @@ impl DB {
         self.wb.clear();
         self.wb.put(key, value);
         self.write(sync)?;
-
-        self.mem_table.set(key, value);
         Ok(())
     }
 
@@ -70,8 +101,6 @@ impl DB {
         self.wb.clear();
         self.wb.delete(key);
         self.write(sync)?;
-
-        self.mem_table.delete(key);
         Ok(())
     }
 
@@ -85,7 +114,7 @@ impl DB {
         if sync {
             self.log_writer.sync()?;
         }
-        // TODO: Insert write_batch into memtable
+        self.wb.apply_to(&mut self.mem_table)?;
 
         self.sequence = last_sequence;
         Ok(())
@@ -94,7 +123,7 @@ impl DB {
 
 pub(crate) fn put_varint32(buf: &mut Vec<u8>, mut value: u32) -> usize {
     let mut cnt = 0;
-    loop {
+    while {
         let mut byte = (value & 0x7f) as u8;
         value >>= 7;
         if value != 0 {
@@ -103,11 +132,25 @@ pub(crate) fn put_varint32(buf: &mut Vec<u8>, mut value: u32) -> usize {
         buf.push(byte);
         cnt += 1;
 
-        if value == 0 {
-            break;
-        }
-    }
+        value != 0
+    } {}
     cnt
+}
+
+pub(crate) fn decode_varint32(buf: &[u8]) -> (u32, usize) {
+    let mut value = 0;
+    let mut shift = 0;
+    let mut offset = 0;
+
+    while {
+        let byte = buf[offset];
+        value |= ((byte & 0x7f) as u32) << shift;
+        shift += 7;
+        offset += 1;
+
+        byte & 0x80 != 0
+    } {}
+    (value, offset)
 }
 
 #[test]
@@ -169,6 +212,25 @@ pub(crate) fn decode_fixed64(data: &[u8]) -> u64 {
 pub(crate) fn put_length_prefixed_slice(buf: &mut Vec<u8>, data: &[u8]) {
     put_varint32(buf, data.len() as u32);
     buf.extend_from_slice(data);
+}
+
+pub(crate) fn decode_length_prefixed_slice(data: &[u8]) -> (&[u8], usize) {
+    let (length, offset) = decode_varint32(data);
+    assert!(offset + length as usize <= data.len());
+
+    let value = &data[offset..offset + length as usize];
+    (value, offset + length as usize)
+}
+
+#[test]
+fn test_length_prefixed_slice() {
+    let mut buf = Vec::new();
+    put_length_prefixed_slice(&mut buf, b"hello");
+    assert_eq!(buf, vec![5, b'h', b'e', b'l', b'l', b'o']);
+
+    let (value, offset) = decode_length_prefixed_slice(&buf);
+    assert_eq!(value, b"hello");
+    assert_eq!(offset, 6);
 }
 
 #[allow(dead_code)]

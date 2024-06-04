@@ -1,8 +1,10 @@
 use crate::{
     decode_fixed32, decode_fixed64, encode_fixed32, encode_fixed64, put_length_prefixed_slice,
+    MemTable, Status, ValueType,
 };
+use crate::{decode_length_prefixed_slice, Result};
 
-enum ValueType {
+enum ValueTypeCode {
     Deletion = 0,
     Value = 1,
 }
@@ -49,7 +51,7 @@ impl WriteBatch {
         let count = self.get_count();
         self.set_count(count + 1);
 
-        self.rep.push(ValueType::Value as u8);
+        self.rep.push(ValueTypeCode::Value as u8);
         put_length_prefixed_slice(&mut self.rep, key);
         put_length_prefixed_slice(&mut self.rep, value);
     }
@@ -58,14 +60,73 @@ impl WriteBatch {
         let count = self.get_count();
         self.set_count(count + 1);
 
-        self.rep.push(ValueType::Deletion as u8);
+        self.rep.push(ValueTypeCode::Deletion as u8);
         put_length_prefixed_slice(&mut self.rep, key);
+    }
+
+    pub fn apply_to(&self, mem_table: &mut MemTable) -> Result<()> {
+        let iter = self.iter();
+        for result in iter {
+            let value = result?;
+            match value {
+                ValueType::Value(key, value) => mem_table.set(key, value),
+                ValueType::Deletion(key) => mem_table.delete(key),
+            }
+        }
+        Ok(())
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Result<ValueType<'_>>> {
+        WriteBatchIter::new(self)
+    }
+}
+
+pub(crate) struct WriteBatchIter<'a> {
+    wb: &'a WriteBatch,
+    offset: usize,
+}
+
+impl<'a> WriteBatchIter<'a> {
+    pub fn new(wb: &'a WriteBatch) -> Self {
+        assert!(wb.rep.len() >= 12);
+        Self { wb, offset: 12 }
+    }
+}
+
+impl<'a> Iterator for WriteBatchIter<'a> {
+    type Item = Result<ValueType<'a>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.wb.rep.len() {
+            return None;
+        }
+
+        let value_type_bytes = self.wb.rep[self.offset];
+        self.offset += 1;
+        let value_type = match value_type_bytes {
+            0 => ValueTypeCode::Deletion,
+            1 => ValueTypeCode::Value,
+            _ => return Some(Err(Status::Corruption)),
+        };
+
+        let (key, bytes) = decode_length_prefixed_slice(&self.wb.rep[self.offset..]);
+        self.offset += bytes;
+
+        match value_type {
+            ValueTypeCode::Deletion => Some(Ok(ValueType::deletion(key))),
+            ValueTypeCode::Value => {
+                let (value, bytes) = decode_length_prefixed_slice(&self.wb.rep[self.offset..]);
+                self.offset += bytes;
+                Some(Ok(ValueType::value(key, value)))
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::write_batch::{ValueType, WriteBatch};
+    use crate::write_batch::{ValueTypeCode, WriteBatch};
+    use crate::ValueType;
 
     #[test]
     fn test_write_batch() {
@@ -85,11 +146,11 @@ mod tests {
         assert_eq!(
             batch.rep[12..],
             vec![
-                ValueType::Value as u8, 4, b'k', b'e', b'y', b'1', 6, b'v', b'a', b'l', b'u', b'e', b'1',
-                ValueType::Value as u8, 4, b'k', b'e', b'y', b'2', 6, b'v', b'a', b'l', b'u', b'e', b'2',
-                ValueType::Deletion as u8, 4, b'k', b'e', b'y', b'1',
-                ValueType::Value as u8, 4, b'k', b'e', b'y', b'3', 6, b'v', b'a', b'l', b'u', b'e', b'3',
-                ValueType::Deletion as u8, 4, b'k', b'e', b'y', b'0',
+                ValueTypeCode::Value as u8, 4, b'k', b'e', b'y', b'1', 6, b'v', b'a', b'l', b'u', b'e', b'1',
+                ValueTypeCode::Value as u8, 4, b'k', b'e', b'y', b'2', 6, b'v', b'a', b'l', b'u', b'e', b'2',
+                ValueTypeCode::Deletion as u8, 4, b'k', b'e', b'y', b'1',
+                ValueTypeCode::Value as u8, 4, b'k', b'e', b'y', b'3', 6, b'v', b'a', b'l', b'u', b'e', b'3',
+                ValueTypeCode::Deletion as u8, 4, b'k', b'e', b'y', b'0',
             ]
         );
 
@@ -102,7 +163,7 @@ mod tests {
 
         let mut offset = 12;
         // type(put)
-        assert_eq!(batch.rep[offset], ValueType::Value as u8);
+        assert_eq!(batch.rep[offset], ValueTypeCode::Value as u8);
         offset += 1;
 
         // key
@@ -118,7 +179,7 @@ mod tests {
         offset += long_value.len();
 
         // type(delete)
-        assert_eq!(batch.rep[offset], ValueType::Deletion as u8);
+        assert_eq!(batch.rep[offset], ValueTypeCode::Deletion as u8);
         offset += 1;
         // key
         assert_eq!(batch.rep[offset..offset + 2], vec![0x80, 0x01]);
@@ -127,5 +188,23 @@ mod tests {
         offset += long_del_key.len();
 
         assert_eq!(offset, batch.rep.len());
+    }
+
+    #[test]
+    fn test_write_batch_iter() {
+        let mut batch = WriteBatch::new();
+        batch.put(b"key1", b"value1");
+        batch.put(b"key2", b"value2");
+        batch.delete(b"key1");
+        batch.put(b"key3", b"value3");
+        batch.delete(b"key0");
+
+        let mut iter = batch.iter();
+        assert_eq!(iter.next(), Some(Ok(ValueType::value(b"key1", b"value1"))));
+        assert_eq!(iter.next(), Some(Ok(ValueType::value(b"key2", b"value2"))));
+        assert_eq!(iter.next(), Some(Ok(ValueType::deletion(b"key1"))));
+        assert_eq!(iter.next(), Some(Ok(ValueType::value(b"key3", b"value3"))));
+        assert_eq!(iter.next(), Some(Ok(ValueType::deletion(b"key0"))));
+        assert_eq!(iter.next(), None);
     }
 }
