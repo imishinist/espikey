@@ -7,6 +7,7 @@ use itertools::Itertools;
 use thiserror::Error;
 
 pub mod log;
+pub mod version_edit;
 pub mod write_batch;
 
 pub type Result<T> = anyhow::Result<T, Status>;
