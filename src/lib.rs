@@ -7,6 +7,7 @@ use itertools::Itertools;
 use thiserror::Error;
 
 pub mod log;
+pub mod table;
 pub mod version_edit;
 pub mod write_batch;
 
@@ -180,6 +181,22 @@ fn test_put_varint32() {
     let mut buf = Vec::new();
     put_varint32(&mut buf, 128);
     assert_eq!(buf, vec![0x80, 0x01]);
+}
+
+fn decode_varint64(buf: &[u8]) -> (u64, usize) {
+    let mut value = 0;
+    let mut shift = 0;
+    let mut offset = 0;
+
+    while {
+        let byte = buf[offset];
+        value |= ((byte & 0x7f) as u64) << shift;
+        shift += 7;
+        offset += 1;
+
+        byte & 0x80 != 0
+    } {}
+    (value, offset)
 }
 
 #[allow(dead_code)]

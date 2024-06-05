@@ -1,9 +1,11 @@
 use std::fs::OpenOptions;
+use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
 use itertools::Itertools;
 
+use espikey::table::{Footer, FOOTER_ENCODED_LENGTH};
 use espikey::version_edit::VersionEdit;
 use espikey::write_batch::{ValueTypeCode, WriteBatch};
 use espikey::{log, InternalKey};
@@ -15,11 +17,20 @@ enum Mode {
     VersionEdit,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Target {
+    Table,
+    Wal,
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about=None)]
 #[clap(propagate_version = true)]
 struct EspikeyTool {
-    wal_file: PathBuf,
+    file: PathBuf,
+
+    #[clap(short, long, default_value = "wal")]
+    target: Target,
 
     #[clap(short, long, default_value = "write-batch")]
     mode: Mode,
@@ -109,56 +120,90 @@ fn show_version_edit(prefix: &str, ve: &VersionEdit) {
 fn main() -> anyhow::Result<()> {
     let args = EspikeyTool::parse();
 
-    let wal_file = OpenOptions::new().read(true).open(&args.wal_file)?;
+    let file = OpenOptions::new().read(true).open(&args.file)?;
+    match args.target {
+        Target::Table => {
+            let mut buf = [0; FOOTER_ENCODED_LENGTH];
+            let file_size = file.metadata()?.len();
+            file.read_at(&mut buf, file_size - FOOTER_ENCODED_LENGTH as u64)?;
 
-    let mut reader = log::Reader::new(wal_file);
-    match args.mode {
-        Mode::Raw => {
-            println!("raw WAL records");
+            let footer = Footer::decode_from(&buf)?;
+
+            let mut scratch = Vec::new();
+            let meta_index_block =
+                espikey::table::read_block(&file, &footer.metaindex_handle, &mut scratch)?;
+
+            let mut scratch = Vec::new();
+            let index_block =
+                espikey::table::read_block(&file, &footer.index_handle, &mut scratch)?;
+
+            println!("meta index block: ");
+            show_human_readable("    ", meta_index_block);
+
+            println!("index block: ");
+            show_human_readable("    ", index_block);
+
+            println!("footer: ");
+            println!(
+                "    meta index handle: offset={}\tsize={}",
+                footer.metaindex_handle.offset, footer.metaindex_handle.size
+            );
+            println!(
+                "    index handle:      offset={}\tsize={}",
+                footer.index_handle.offset, footer.index_handle.size
+            );
         }
-        Mode::WriteBatch => {
-            println!("WAL write batches");
-        }
-        Mode::VersionEdit => {
-            println!("WAL version edit");
-        }
-    }
-    while let Some(entry) = reader.read()? {
-        match args.mode {
-            Mode::Raw => {
-                println!("length: {}", entry.len());
-                show_wal_record(&entry);
-                continue;
-            }
-            Mode::WriteBatch => {
-                let wb = WriteBatch::from(entry)?;
-                println!("sequence: {}, count: {}", wb.get_sequence(), wb.get_count());
-                for item in wb.iter() {
-                    match item {
-                        Ok(item) => match item {
-                            espikey::ValueType::Deletion(key) => {
-                                println!("delete");
-                                print!("\tkey: ");
-                                show_human_readable("\t", key);
-                            }
-                            espikey::ValueType::Value(key, value) => {
-                                println!("put");
-                                print!("\tkey: ");
-                                show_human_readable("\t", key);
-                                print!("\tvalue: ");
-                                show_human_readable("\t", value);
-                            }
-                        },
-                        Err(e) => {
-                            println!("\tError: {:?}", e);
-                        }
-                    }
+        Target::Wal => {
+            let mut reader = log::Reader::new(file);
+            match args.mode {
+                Mode::Raw => {
+                    println!("raw WAL records");
+                }
+                Mode::WriteBatch => {
+                    println!("WAL write batches");
+                }
+                Mode::VersionEdit => {
+                    println!("WAL version edit");
                 }
             }
-            Mode::VersionEdit => {
-                println!("length: {}", entry.len());
-                let ve = VersionEdit::decode_from(&entry)?;
-                show_version_edit("\t", &ve);
+            while let Some(entry) = reader.read()? {
+                match args.mode {
+                    Mode::Raw => {
+                        println!("length: {}", entry.len());
+                        show_wal_record(&entry);
+                        continue;
+                    }
+                    Mode::WriteBatch => {
+                        let wb = WriteBatch::from(entry)?;
+                        println!("sequence: {}, count: {}", wb.get_sequence(), wb.get_count());
+                        for item in wb.iter() {
+                            match item {
+                                Ok(item) => match item {
+                                    espikey::ValueType::Deletion(key) => {
+                                        println!("delete");
+                                        print!("\tkey: ");
+                                        show_human_readable("\t", key);
+                                    }
+                                    espikey::ValueType::Value(key, value) => {
+                                        println!("put");
+                                        print!("\tkey: ");
+                                        show_human_readable("\t", key);
+                                        print!("\tvalue: ");
+                                        show_human_readable("\t", value);
+                                    }
+                                },
+                                Err(e) => {
+                                    println!("\tError: {:?}", e);
+                                }
+                            }
+                        }
+                    }
+                    Mode::VersionEdit => {
+                        println!("length: {}", entry.len());
+                        let ve = VersionEdit::decode_from(&entry)?;
+                        show_version_edit("\t", &ve);
+                    }
+                }
             }
         }
     }
