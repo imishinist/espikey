@@ -1,4 +1,4 @@
-use crate::{decode_length_prefixed_slice, decode_varint32, Result, Status};
+use crate::{decode_length_prefixed_slice, decode_varint32, InternalKey, Result, Status};
 use std::collections::HashSet;
 
 const NUM_LEVELS: usize = 7;
@@ -7,9 +7,9 @@ const NUM_LEVELS: usize = 7;
 pub struct FileMetaData {
     pub number: usize,
     pub file_size: usize,
-    // TODO: InternalKey
-    pub smallest: Vec<u8>,
-    pub largest: Vec<u8>,
+
+    pub smallest: InternalKey,
+    pub largest: InternalKey,
 }
 
 #[derive(Debug)]
@@ -88,8 +88,7 @@ pub struct VersionEdit {
     pub next_file_number: Option<usize>,
     pub last_sequence: Option<u64>,
 
-    // TODO: InternalKey
-    pub compact_pointers: Vec<(usize, Vec<u8>)>,
+    pub compact_pointers: Vec<(usize, InternalKey)>,
     pub deleted_files: HashSet<(usize, usize)>,
     pub new_files: Vec<(usize, FileMetaData)>,
 }
@@ -141,7 +140,7 @@ impl VersionEdit {
                     let level = get_level(src, &mut pos)?;
                     let (slice, bytes) = decode_length_prefixed_slice(&src[pos..]);
                     pos += bytes;
-                    compact_pointers.push((level, slice.to_vec()));
+                    compact_pointers.push((level, InternalKey::decode_from(slice)));
                 }
                 Tag::DeletedFile => {
                     let level = get_level(src, &mut pos)?;
@@ -164,8 +163,8 @@ impl VersionEdit {
                         FileMetaData {
                             number: num as usize,
                             file_size: file_size as usize,
-                            smallest: smallest.to_vec(),
-                            largest: largest.to_vec(),
+                            smallest: InternalKey::decode_from(smallest),
+                            largest: InternalKey::decode_from(largest),
                         },
                     ));
                 }

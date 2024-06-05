@@ -2,7 +2,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::{collections::HashMap, io::Write};
 
-use crate::write_batch::WriteBatch;
+use crate::write_batch::{ValueTypeCode, WriteBatch};
 use itertools::Itertools;
 use thiserror::Error;
 
@@ -258,6 +258,41 @@ fn test_length_prefixed_slice() {
     let (value, offset) = decode_length_prefixed_slice(&buf);
     assert_eq!(value, b"hello");
     assert_eq!(offset, 6);
+}
+
+#[derive(Debug)]
+pub struct InternalKey {
+    rep: Vec<u8>,
+}
+
+impl InternalKey {
+    pub fn user_key(&self) -> &[u8] {
+        assert!(self.rep.len() >= 8);
+        &self.rep[..self.rep.len() - 8]
+    }
+
+    pub fn sequence(&self) -> u64 {
+        assert!(self.rep.len() >= 8);
+        let num = decode_fixed64(&self.rep[self.rep.len() - 8..]);
+        num >> 8
+    }
+
+    pub fn value_type_code(&self) -> Result<ValueTypeCode> {
+        assert!(self.rep.len() >= 8);
+        match self.rep[self.rep.len() - 8] {
+            0 => Ok(ValueTypeCode::Deletion),
+            1 => Ok(ValueTypeCode::Value),
+            _ => Err(Status::Corruption),
+        }
+    }
+
+    pub fn get_contents(&self) -> &[u8] {
+        &self.rep
+    }
+
+    pub fn decode_from(data: &[u8]) -> Self {
+        InternalKey { rep: data.to_vec() }
+    }
 }
 
 #[allow(dead_code)]

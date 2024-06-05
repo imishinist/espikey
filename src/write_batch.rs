@@ -4,7 +4,7 @@ use crate::{
 };
 use crate::{decode_length_prefixed_slice, Result};
 
-pub(crate) enum ValueTypeCode {
+pub enum ValueTypeCode {
     Deletion = 0,
     Value = 1,
 }

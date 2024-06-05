@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 use itertools::Itertools;
 
-use espikey::log;
 use espikey::version_edit::VersionEdit;
-use espikey::write_batch::WriteBatch;
+use espikey::write_batch::{ValueTypeCode, WriteBatch};
+use espikey::{log, InternalKey};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Mode {
@@ -30,7 +30,7 @@ fn encode_bytes_to_hex(data: &[u8]) -> String {
 }
 
 fn show_human_readable(prefix: &str, data: &[u8]) {
-    print!("{}[{}]: ", prefix, encode_bytes_to_hex(data));
+    print!("{}[{}]=>", prefix, encode_bytes_to_hex(data));
     print!("\"");
     for byte in data {
         if byte.is_ascii_alphanumeric() {
@@ -55,6 +55,24 @@ fn show_wal_record(data: &[u8]) {
     }
 }
 
+fn show_internal_key(prefix: &str, ikey: &InternalKey) {
+    let user_key = ikey.user_key();
+    let seq = ikey.sequence();
+    let ty = match ikey.value_type_code() {
+        Ok(ValueTypeCode::Deletion) => "deletion",
+        Ok(ValueTypeCode::Value) => "value",
+        _ => "unknown",
+    };
+    println!(
+        "{} [{}]=>('{}' @ {} : {})",
+        prefix,
+        encode_bytes_to_hex(ikey.get_contents()),
+        encode_bytes_to_hex(user_key),
+        seq,
+        ty
+    );
+}
+
 fn show_version_edit(prefix: &str, ve: &VersionEdit) {
     if let Some(comparator) = &ve.comparator {
         print!("{}comparator:          ", prefix);
@@ -73,12 +91,8 @@ fn show_version_edit(prefix: &str, ve: &VersionEdit) {
         println!("{}last_sequence:       {}", prefix, last_sequence);
     }
     for (level, key) in &ve.compact_pointers {
-        println!(
-            "{}compact_pointer[{}]: {}",
-            prefix,
-            level,
-            encode_bytes_to_hex(key)
-        );
+        print!("{}compact_pointer[{}]: ", prefix, level);
+        show_internal_key("", key);
     }
     for (level, file) in &ve.deleted_files {
         println!("{}deleted_file[{}]:    {}", prefix, level, file);
@@ -87,8 +101,8 @@ fn show_version_edit(prefix: &str, ve: &VersionEdit) {
         println!("{}new_file[{}]:", prefix, level);
         println!("{}    number:    {}", prefix, file.number);
         println!("{}    file_size: {}", prefix, file.file_size);
-        show_human_readable(&format!("{}    smallest:  ", prefix), &file.smallest);
-        show_human_readable(&format!("{}    largest:   ", prefix), &file.largest);
+        show_internal_key(&format!("{}    smallest: ", prefix), &file.smallest);
+        show_internal_key(&format!("{}    largest:  ", prefix), &file.largest);
     }
 }
 
