@@ -139,6 +139,23 @@ pub(crate) fn put_varint32(buf: &mut Vec<u8>, mut value: u32) -> usize {
     cnt
 }
 
+#[allow(dead_code)]
+pub(crate) fn put_varint64(buf: &mut Vec<u8>, mut value: u64) -> usize {
+    let mut cnt = 0;
+    while {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        buf.push(byte);
+        cnt += 1;
+
+        value != 0
+    } {}
+    cnt
+}
+
 pub(crate) fn write_varint32<W: Write>(writer: &mut W, mut value: u32) -> std::io::Result<usize> {
     let mut cnt = 0;
     while {
@@ -155,48 +172,104 @@ pub(crate) fn write_varint32<W: Write>(writer: &mut W, mut value: u32) -> std::i
     Ok(cnt)
 }
 
-pub(crate) fn decode_varint32(buf: &[u8]) -> (u32, usize) {
-    let mut value = 0;
-    let mut shift = 0;
-    let mut offset = 0;
+pub(crate) fn decode_varint32(buf: &[u8]) -> Option<(u32, usize)> {
+    if buf[0] & 0x80 == 0 {
+        return Some((buf[0] as u32, 1));
+    }
 
-    while {
-        let byte = buf[offset];
-        value |= ((byte & 0x7f) as u32) << shift;
-        shift += 7;
-        offset += 1;
+    let mut result = 0;
+    let mut i = 0;
+    for shift in (0..=28).step_by(7) {
+        let byte = buf[i] as u32;
+        i += 1;
+        if byte & 0x80 != 0 {
+            result |= (byte & 0x7f) << shift;
+        } else {
+            if shift == 28 && byte > 0x0f {
+                return None;
+            }
+            result |= byte << shift;
+            return Some((result, i));
+        }
+    }
+    None
+}
 
-        byte & 0x80 != 0
-    } {}
-    (value, offset)
+fn decode_varint64(buf: &[u8]) -> Option<(u64, usize)> {
+    if buf[0] & 0x80 == 0 {
+        return Some((buf[0] as u64, 1));
+    }
+
+    let mut i = 0;
+    let mut result = 0;
+    for shift in (0..=63).step_by(7) {
+        let byte = buf[i] as u64;
+        i += 1;
+        if byte & 0x80 != 0 {
+            result |= (byte & 0x7f) << shift;
+        } else {
+            result |= byte << shift;
+            return Some((result, i));
+        }
+    }
+    None
 }
 
 #[test]
-fn test_put_varint32() {
+fn test_decode_varint() {
     let mut buf = Vec::new();
-    put_varint32(&mut buf, 127);
-    assert_eq!(buf, vec![127]);
+
+    put_varint32(&mut buf, 0);
+    assert_eq!(decode_varint32(&buf), Some((0, 1)));
     buf.clear();
 
-    let mut buf = Vec::new();
+    put_varint32(&mut buf, 127);
+    assert_eq!(decode_varint32(&buf), Some((127, 1)));
+    buf.clear();
+
     put_varint32(&mut buf, 128);
-    assert_eq!(buf, vec![0x80, 0x01]);
-}
+    assert_eq!(decode_varint32(&buf), Some((128, 2)));
+    buf.clear();
 
-fn decode_varint64(buf: &[u8]) -> (u64, usize) {
-    let mut value = 0;
-    let mut shift = 0;
-    let mut offset = 0;
+    put_varint32(&mut buf, u32::MAX - 1);
+    assert_eq!(decode_varint32(&buf), Some((u32::MAX - 1, 5)));
+    buf.clear();
 
-    while {
-        let byte = buf[offset];
-        value |= ((byte & 0x7f) as u64) << shift;
-        shift += 7;
-        offset += 1;
+    put_varint32(&mut buf, u32::MAX);
+    assert_eq!(decode_varint32(&buf), Some((u32::MAX, 5)));
+    buf.clear();
 
-        byte & 0x80 != 0
-    } {}
-    (value, offset)
+    put_varint64(&mut buf, 0);
+    assert_eq!(decode_varint32(&buf), Some((0, 1)));
+    buf.clear();
+
+    put_varint64(&mut buf, u32::MAX as u64);
+    assert_eq!(decode_varint32(&buf), Some((u32::MAX, 5)));
+    buf.clear();
+
+    put_varint64(&mut buf, u32::MAX as u64 + 1);
+    assert_eq!(decode_varint32(&buf), None);
+    buf.clear();
+
+    put_varint64(&mut buf, u64::MAX);
+    assert_eq!(decode_varint32(&buf), None);
+    buf.clear();
+
+    put_varint64(&mut buf, 0);
+    assert_eq!(decode_varint64(&buf), Some((0, 1)));
+    buf.clear();
+
+    put_varint64(&mut buf, u32::MAX as u64);
+    assert_eq!(decode_varint64(&buf), Some((u32::MAX as u64, 5)));
+    buf.clear();
+
+    put_varint64(&mut buf, u32::MAX as u64 + 1);
+    assert_eq!(decode_varint64(&buf), Some((u32::MAX as u64 + 1, 5)));
+    buf.clear();
+
+    put_varint64(&mut buf, u64::MAX);
+    assert_eq!(decode_varint64(&buf), Some((u64::MAX, 10)));
+    buf.clear();
 }
 
 #[allow(dead_code)]
@@ -258,12 +331,14 @@ pub(crate) fn put_length_prefixed_slice(buf: &mut Vec<u8>, data: &[u8]) {
     buf.extend_from_slice(data);
 }
 
-pub(crate) fn decode_length_prefixed_slice(data: &[u8]) -> (&[u8], usize) {
-    let (length, offset) = decode_varint32(data);
-    assert!(offset + length as usize <= data.len());
+pub(crate) fn decode_length_prefixed_slice(data: &[u8]) -> Option<(&[u8], usize)> {
+    let (length, offset) = decode_varint32(data)?;
+    if offset + length as usize > data.len() {
+        return None;
+    }
 
     let value = &data[offset..offset + length as usize];
-    (value, offset + length as usize)
+    Some((value, offset + length as usize))
 }
 
 #[test]
@@ -272,7 +347,7 @@ fn test_length_prefixed_slice() {
     put_length_prefixed_slice(&mut buf, b"hello");
     assert_eq!(buf, vec![5, b'h', b'e', b'l', b'l', b'o']);
 
-    let (value, offset) = decode_length_prefixed_slice(&buf);
+    let (value, offset) = decode_length_prefixed_slice(&buf).unwrap();
     assert_eq!(value, b"hello");
     assert_eq!(offset, 6);
 }

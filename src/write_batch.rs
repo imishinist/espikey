@@ -127,13 +127,13 @@ impl<'a> Iterator for WriteBatchIter<'a> {
             _ => return Some(Err(Status::Corruption)),
         };
 
-        let (key, bytes) = decode_length_prefixed_slice(&self.wb.rep[self.offset..]);
+        let (key, bytes) = decode_length_prefixed_slice(&self.wb.rep[self.offset..])?;
         self.offset += bytes;
 
         match value_type {
             ValueTypeCode::Deletion => Some(Ok(ValueType::deletion(key))),
             ValueTypeCode::Value => {
-                let (value, bytes) = decode_length_prefixed_slice(&self.wb.rep[self.offset..]);
+                let (value, bytes) = decode_length_prefixed_slice(&self.wb.rep[self.offset..])?;
                 self.offset += bytes;
                 Some(Ok(ValueType::value(key, value)))
             }

@@ -13,7 +13,6 @@ pub const FOOTER_ENCODED_LENGTH: usize = 2 * BLOCK_HANDLE_MAX_ENCODED_LENGTH + 8
 
 const TABLE_MAGIC_NUMBER: u64 = 0xdb4775248b80fb57;
 
-
 // BlockHandle specifies a Block's location in a file.
 // but it's not contain a type(1-byte) and checksum(4-bytes)
 #[derive(Debug)]
@@ -23,11 +22,11 @@ pub struct BlockHandle {
 }
 
 impl BlockHandle {
-    pub fn decode_from(src: &[u8]) -> (BlockHandle, usize) {
-        let (offset, offset_bytes) = decode_varint64(src);
-        let (size, size_bytes) = decode_varint64(&src[offset_bytes..]);
+    pub fn decode_from(src: &[u8]) -> Result<(BlockHandle, usize)> {
+        let (offset, offset_bytes) = decode_varint64(src).ok_or(Status::Corruption)?;
+        let (size, size_bytes) = decode_varint64(&src[offset_bytes..]).ok_or(Status::Corruption)?;
 
-        (BlockHandle { offset, size }, offset_bytes + size_bytes)
+        Ok((BlockHandle { offset, size }, offset_bytes + size_bytes))
     }
 }
 
@@ -74,8 +73,8 @@ impl Footer {
             return Err(Status::Corruption);
         }
 
-        let (metaindex_handle, offset) = BlockHandle::decode_from(&footer.rep[..]);
-        let (index_handle, _) = BlockHandle::decode_from(&footer.rep[offset..]);
+        let (metaindex_handle, offset) = BlockHandle::decode_from(&footer.rep[..])?;
+        let (index_handle, _) = BlockHandle::decode_from(&footer.rep[offset..])?;
 
         Ok(Footer {
             metaindex_handle,
