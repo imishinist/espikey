@@ -155,6 +155,23 @@ fn main() -> anyhow::Result<()> {
             let index_block =
                 espikey::table::read_block(&file, &footer.index_handle, &mut scratch)?;
 
+            println!("data block(accessed by index): ");
+            let block = Block::new(index_block).unwrap();
+            for (i, (_, value)) in block.iter().enumerate() {
+                let mut scratch = Vec::new();
+                let (block_handle, _) = BlockHandle::decode_from(value)?;
+                let block = espikey::table::read_block(&file, &block_handle, &mut scratch)?;
+                let block = Block::new(block).unwrap();
+
+                println!("=== block#{} (offset={}, size={}) ===", i, block_handle.offset, block_handle.size);
+                for (key, value) in block.iter() {
+                    let ikey = InternalKey::decode_from(&key);
+                    show_internal_key("        key:   ", &ikey);
+                    show_human_readable("        value: ", value);
+                }
+                println!();
+            }
+
             println!("meta index block: ");
             let block = Block::new(meta_index_block).unwrap();
             for (key, value) in block.iter() {
@@ -165,21 +182,10 @@ fn main() -> anyhow::Result<()> {
             println!("index block: ");
             let block = Block::new(index_block).unwrap();
             for (key, value) in block.iter() {
-                let mut scratch = Vec::new();
-                let (block_handle, _) = BlockHandle::decode_from(value)?;
-                let block = espikey::table::read_block(&file, &block_handle, &mut scratch)?;
-                let block = Block::new(block).unwrap();
-
                 let ikey = InternalKey::decode_from(&key);
+                let (block_handle, _) = BlockHandle::decode_from(value)?;
                 show_internal_key("    key(index): ", &ikey);
                 show_block_handle("    value:      ", &block_handle);
-
-                for (key, value) in block.iter() {
-                    let ikey = InternalKey::decode_from(&key);
-                    show_internal_key("        key:   ", &ikey);
-                    show_human_readable("        value: ", value);
-                }
-                println!();
             }
 
             println!("footer: ");
