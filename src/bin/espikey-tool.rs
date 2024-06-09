@@ -126,7 +126,7 @@ fn show_version_edit(prefix: &str, ve: &VersionEdit) {
         println!("{}deleted_file[{}]:    {}", prefix, level, file);
     }
     for (level, file) in &ve.new_files {
-        println!("{}new_file[{}]:", prefix, level);
+        println!("{}new_file[level={}]:", prefix, level);
         println!("{}    number:    {}", prefix, file.number);
         println!("{}    file_size: {}", prefix, file.file_size);
         show_internal_key(&format!("{}    smallest: ", prefix), &file.smallest);
