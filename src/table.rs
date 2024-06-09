@@ -2,7 +2,7 @@ use std::fs::File;
 use std::os::unix::fs::FileExt;
 use zerocopy::{AsBytes, FromBytes, FromZeroes};
 
-use crate::{decode_fixed32, decode_varint32, decode_varint64, Result, Status};
+use crate::{decode_fixed32, decode_varint32, decode_varint64, put_varint64, Result, Status};
 
 pub struct Block<'a> {
     data: &'a [u8],
@@ -170,6 +170,11 @@ impl BlockHandle {
         let (size, size_bytes) = decode_varint64(&src[offset_bytes..]).ok_or(Status::Corruption)?;
 
         Ok((BlockHandle { offset, size }, offset_bytes + size_bytes))
+    }
+
+    pub fn encode_to(&self, dst: &mut Vec<u8>) {
+        put_varint64(dst, self.offset);
+        put_varint64(dst, self.size);
     }
 }
 

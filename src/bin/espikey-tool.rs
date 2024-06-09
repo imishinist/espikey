@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 use itertools::Itertools;
 
-use espikey::table::{Block, Footer, FOOTER_ENCODED_LENGTH};
+use espikey::table::{Block, BlockHandle, Footer, FOOTER_ENCODED_LENGTH};
 use espikey::version_edit::VersionEdit;
 use espikey::write_batch::{ValueTypeCode, WriteBatch};
 use espikey::{log, InternalKey};
@@ -75,12 +75,24 @@ fn show_internal_key(prefix: &str, ikey: &InternalKey) {
         _ => "unknown",
     };
     println!(
-        "{} [{}]=>('{}' @ {} : {})",
+        "{}[{}]=>('{}' @ {} : {})",
         prefix,
         encode_bytes_to_hex(ikey.get_contents()),
         encode_bytes_to_hex(user_key),
         seq,
         ty
+    );
+}
+
+fn show_block_handle(prefix: &str, block_handle: &BlockHandle) {
+    let mut content = Vec::new();
+    block_handle.encode_to(&mut content);
+    println!(
+        "{}[{}]=>block_handle {{ .offset: {}, .size: {}}}",
+        prefix,
+        encode_bytes_to_hex(&content),
+        block_handle.offset,
+        block_handle.size
     );
 }
 
@@ -102,7 +114,7 @@ fn show_version_edit(prefix: &str, ve: &VersionEdit) {
         println!("{}last_sequence:       {}", prefix, last_sequence);
     }
     for (level, key) in &ve.compact_pointers {
-        print!("{}compact_pointer[{}]: ", prefix, level);
+        print!("{}compact_pointer[{}]:  ", prefix, level);
         show_internal_key("", key);
     }
     for (level, file) in &ve.deleted_files {
@@ -147,8 +159,21 @@ fn main() -> anyhow::Result<()> {
             println!("index block: ");
             let block = Block::new(index_block).unwrap();
             for (key, value) in block.iter() {
-                show_human_readable("    key:   ", &key);
-                show_human_readable("    value: ", value);
+                let mut scratch = Vec::new();
+                let (block_handle, _) = BlockHandle::decode_from(value)?;
+                let block = espikey::table::read_block(&file, &block_handle, &mut scratch)?;
+                let block = Block::new(block).unwrap();
+
+                let ikey = InternalKey::decode_from(&key);
+                show_internal_key("    key(index): ", &ikey);
+                show_block_handle("    value:      ", &block_handle);
+
+                for (key, value) in block.iter() {
+                    let ikey = InternalKey::decode_from(&key);
+                    show_internal_key("        key:   ", &ikey);
+                    show_human_readable("        value: ", value);
+                }
+                println!();
             }
 
             println!("footer: ");
