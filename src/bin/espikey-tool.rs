@@ -2,7 +2,7 @@ use std::fs::OpenOptions;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use itertools::Itertools;
 
 use espikey::table::{Block, BlockHandle, Footer, FOOTER_ENCODED_LENGTH};
@@ -10,17 +10,24 @@ use espikey::version_edit::VersionEdit;
 use espikey::write_batch::{ValueTypeCode, WriteBatch};
 use espikey::{log, InternalKey};
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy)]
 enum Mode {
-    Raw,
-    WriteBatch,
-    VersionEdit,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum Target {
+    Manifest,
     Table,
     Wal,
+}
+
+impl Mode {
+    // estimate mode from file name
+    fn from_file_name(file_name: &str) -> Self {
+        if file_name.ends_with(".log") {
+            Mode::Wal
+        } else if file_name.ends_with(".ldb") {
+            Mode::Table
+        } else {
+            Mode::Manifest
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -29,11 +36,8 @@ enum Target {
 struct EspikeyTool {
     file: PathBuf,
 
-    #[clap(short, long, default_value = "wal")]
-    target: Target,
-
-    #[clap(short, long, default_value = "write-batch")]
-    mode: Mode,
+    #[clap(short, long, default_value_t = false)]
+    raw: bool,
 }
 
 fn encode_bytes_to_hex(data: &[u8]) -> String {
@@ -54,6 +58,7 @@ fn show_human_readable(prefix: &str, data: &[u8]) {
     println!();
 }
 
+#[allow(dead_code)]
 fn show_wal_record(data: &[u8]) {
     // show like hexdump with offset
     for chunk in data.chunks(16) {
@@ -133,8 +138,9 @@ fn main() -> anyhow::Result<()> {
     let args = EspikeyTool::parse();
 
     let file = OpenOptions::new().read(true).open(&args.file)?;
-    match args.target {
-        Target::Table => {
+    match Mode::from_file_name(args.file.to_str().unwrap()) {
+        Mode::Table => {
+            println!("sstable");
             let mut buf = [0; FOOTER_ENCODED_LENGTH];
             let file_size = file.metadata()?.len();
             file.read_at(&mut buf, file_size - FOOTER_ENCODED_LENGTH as u64)?;
@@ -186,55 +192,40 @@ fn main() -> anyhow::Result<()> {
                 footer.index_handle.offset, footer.index_handle.size
             );
         }
-        Target::Wal => {
+        Mode::Manifest => {
+            println!("manifest(versino-edit)");
             let mut reader = log::Reader::new(file);
-            match args.mode {
-                Mode::Raw => {
-                    println!("raw WAL records");
-                }
-                Mode::WriteBatch => {
-                    println!("WAL write batches");
-                }
-                Mode::VersionEdit => {
-                    println!("WAL version edit");
-                }
-            }
             while let Some(entry) = reader.read()? {
-                match args.mode {
-                    Mode::Raw => {
-                        println!("length: {}", entry.len());
-                        show_wal_record(&entry);
-                        continue;
-                    }
-                    Mode::WriteBatch => {
-                        let wb = WriteBatch::from(entry)?;
-                        println!("sequence: {}, count: {}", wb.get_sequence(), wb.get_count());
-                        for item in wb.iter() {
-                            match item {
-                                Ok(item) => match item {
-                                    espikey::ValueType::Deletion(key) => {
-                                        println!("delete");
-                                        print!("\tkey: ");
-                                        show_human_readable("\t", key);
-                                    }
-                                    espikey::ValueType::Value(key, value) => {
-                                        println!("put");
-                                        print!("\tkey: ");
-                                        show_human_readable("\t", key);
-                                        print!("\tvalue: ");
-                                        show_human_readable("\t", value);
-                                    }
-                                },
-                                Err(e) => {
-                                    println!("\tError: {:?}", e);
-                                }
+                println!("length: {}", entry.len());
+                let ve = VersionEdit::decode_from(&entry)?;
+                show_version_edit("\t", &ve);
+            }
+        }
+        Mode::Wal => {
+            println!("wal");
+            let mut reader = log::Reader::new(file);
+            while let Some(entry) = reader.read()? {
+                let wb = WriteBatch::from(entry)?;
+                println!("sequence: {}, count: {}", wb.get_sequence(), wb.get_count());
+                for item in wb.iter() {
+                    match item {
+                        Ok(item) => match item {
+                            espikey::ValueType::Deletion(key) => {
+                                println!("delete");
+                                print!("\tkey: ");
+                                show_human_readable("\t", key);
                             }
+                            espikey::ValueType::Value(key, value) => {
+                                println!("put");
+                                print!("\tkey: ");
+                                show_human_readable("\t", key);
+                                print!("\tvalue: ");
+                                show_human_readable("\t", value);
+                            }
+                        },
+                        Err(e) => {
+                            println!("\tError: {:?}", e);
                         }
-                    }
-                    Mode::VersionEdit => {
-                        println!("length: {}", entry.len());
-                        let ve = VersionEdit::decode_from(&entry)?;
-                        show_version_edit("\t", &ve);
                     }
                 }
             }
