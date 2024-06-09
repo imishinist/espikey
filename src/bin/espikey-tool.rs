@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
 use itertools::Itertools;
 
-use espikey::table::{Footer, FOOTER_ENCODED_LENGTH};
+use espikey::table::{Block, Footer, FOOTER_ENCODED_LENGTH};
 use espikey::version_edit::VersionEdit;
 use espikey::write_batch::{ValueTypeCode, WriteBatch};
 use espikey::{log, InternalKey};
@@ -138,10 +138,18 @@ fn main() -> anyhow::Result<()> {
                 espikey::table::read_block(&file, &footer.index_handle, &mut scratch)?;
 
             println!("meta index block: ");
-            show_human_readable("    ", meta_index_block);
+            let block = Block::new(meta_index_block).unwrap();
+            for (key, value) in block.iter() {
+                show_human_readable("    key:   ", &key);
+                show_human_readable("    value: ", value);
+            }
 
             println!("index block: ");
-            show_human_readable("    ", index_block);
+            let block = Block::new(index_block).unwrap();
+            for (key, value) in block.iter() {
+                show_human_readable("    key:   ", &key);
+                show_human_readable("    value: ", value);
+            }
 
             println!("footer: ");
             println!(
